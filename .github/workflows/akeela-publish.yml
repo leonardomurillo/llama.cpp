@@ -1,0 +1,44 @@
+name: Akeela publish
+
+# Publishes an akeela-release artifact (from an akeela-release.yml run) as a pre-release.
+# Split out so a failed publish never costs another ~100 min CUDA build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'akeela-release.yml run id that produced the akeela-release artifact'
+        required: true
+        type: string
+      tag:
+        description: 'existing tag to publish (akeela-<base>-<n>)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: akeela-release
+          path: release
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify checksums
+        run: cd release && sha256sum -c SHA256SUMS
+
+      - name: Create pre-release
+        run: |
+          set -euo pipefail
+          { echo "AkeelaOS pool runtime, tag \`${TAG}\` (build run ${{ inputs.run_id }})."; echo; echo '```'; cat release/SHA256SUMS; echo '```'; } > notes.md
+          gh release create "$TAG" release/*.zip release/SHA256SUMS --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "$TAG" --notes-file notes.md --prerelease
