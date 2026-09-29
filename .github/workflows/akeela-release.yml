@@ -2,8 +2,8 @@ name: Akeela release (Windows CUDA)
 
 # AkeelaOS GPU pool runtime: the same llama-bNNNN-bin-win-cuda-12.4-x64.zip + cudart zip
 # layout as upstream's release (llama-server + CPU backends from the windows-cpu build,
-# ggml-cuda.dll injected), built from this fork's `akeela` branch and published as a
-# pre-release with SHA-256s -- the AkeelaOS catalog pins the url + sha256 of each zip.
+# ggml-cuda.dll injected), built from this fork's `akeela` branch and packaged (artifact `akeela-release`) for a
+# hand-published pre-release with SHA-256s -- the AkeelaOS catalog pins the url + sha256 of each zip.
 # Only this job set runs here; upstream's release.yml needs a master push and builds ~20 targets.
 
 on:
@@ -17,7 +17,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
   actions: write
 
 env:
@@ -159,17 +159,11 @@ jobs:
           unzip -l "release/llama-${TAG}-bin-win-cuda-12.4-x64.zip" | grep -E 'llama-server.exe|ggml-cuda.dll|llama-moe-trace.exe'
           (cd release && sha256sum *.zip | tee SHA256SUMS)
 
-      - name: Publish pre-release
-        run: |
-          set -euo pipefail
-          {
-            echo "AkeelaOS pool runtime built from \`akeela\` @ ${GITHUB_SHA}."
-            echo
-            echo "SHA-256:"
-            echo '```'
-            cat release/SHA256SUMS
-            echo '```'
-          } > notes.md
-          gh release create "$TAG" release/*.zip release/SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "$TAG" --notes-file notes.md --prerelease
+      # Publishing from here 403'd ("Resource not accessible by integration") on akeela-b11074-1 even with
+      # contents: write on the token, so the job hands over one artifact and the release is created by hand:
+      #   gh run download <run> -n akeela-release -D rel && gh release create <tag> rel/* --prerelease --verify-tag
+      - uses: actions/upload-artifact@v6
+        with:
+          name: akeela-release
+          path: release/
+          retention-days: 7
