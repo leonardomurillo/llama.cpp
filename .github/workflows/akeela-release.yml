@@ -49,6 +49,12 @@ jobs:
       - name: Install Ninja
         run: choco install ninja
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: akeela-windows-2025-vs2026-x64-cpu
+          evict-old-files: 7d
+
       - name: Build
         shell: cmd
         run: |
@@ -86,6 +92,13 @@ jobs:
 
       - name: Install Ninja
         run: choco install ninja
+
+      # first uncached build took well over an hour on the 4-vCPU runner; ggml picks ccache up by itself (GGML_CCACHE)
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: akeela-windows-2022-x64-cuda-12.4
+          evict-old-files: 7d
 
       - name: Build ggml-cuda
         shell: cmd
