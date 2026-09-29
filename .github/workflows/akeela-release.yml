@@ -1,0 +1,162 @@
+name: Akeela release (Windows CUDA)
+
+# Windows CUDA 12.4 release: the same llama-bNNNN-bin-win-cuda-12.4-x64.zip + cudart zip
+# layout as upstream's release (llama-server + CPU backends from the windows-cpu build,
+# ggml-cuda.dll injected), built from this fork's `akeela` branch and published as a
+# pre-release with SHA-256s (consumers can pin the url + sha256 of each zip).
+# Only this job set runs here; upstream's release.yml needs a master push and builds ~20 targets.
+
+on:
+  push:
+    tags: ['akeela-*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create (akeela-<base>-<n>, e.g. akeela-b11074-1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+
+concurrency:
+  group: akeela-release
+  cancel-in-progress: false
+
+jobs:
+  ui-build:
+    uses: ./.github/workflows/ui-build.yml
+
+  windows-cpu:
+    needs: [ui-build]
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download UI build
+        uses: actions/download-artifact@v7
+        with:
+          name: llama-ui.zip
+          path: tools/ui/dist
+
+      - name: Install Ninja
+        run: choco install ninja
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DGGML_OPENMP=ON ^
+            -DGGML_OPENMP_FETCH=ON ^
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release
+
+      - name: Pack
+        run: 7z a -snl llama-bin-win-cpu-x64.zip .\build\bin\Release\*
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: llama-bin-win-cpu-x64.zip
+          path: llama-bin-win-cpu-x64.zip
+          retention-days: 3
+
+  windows-cuda:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Cuda Toolkit
+        uses: ./.github/actions/windows-setup-cuda
+        with:
+          cuda_version: '12.4'
+          cuda_arch: x64
+
+      - name: Install Ninja
+        run: choco install ninja
+
+      - name: Build ggml-cuda
+        shell: cmd
+        # GGML_CUDA_CUB_3DOT2: same flag upstream's release uses for CUDA 12.4
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CPU=OFF ^
+            -DGGML_CUDA=ON ^
+            -DGGML_CUDA_CUB_3DOT2=ON ^
+            -DLLAMA_BUILD_BORINGSSL=ON
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% --target ggml-cuda
+
+      - name: Pack ggml-cuda + CUDA runtime
+        run: |
+          7z a -snl llama-bin-win-cuda-12.4-x64.zip .\build\bin\Release\ggml-cuda.dll
+          $dst='.\build\bin\cudart\'
+          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\bin\x64" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-llama-bin-win-cuda-12.4-x64.zip $dst\*
+          exit 0
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: llama-bin-win-cuda-12.4-x64.zip
+          path: llama-bin-win-cuda-12.4-x64.zip
+          retention-days: 3
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: cudart-llama-bin-win-cuda-12.4-x64.zip
+          path: cudart-llama-bin-win-cuda-12.4-x64.zip
+          retention-days: 3
+
+  release:
+    needs: [windows-cpu, windows-cuda]
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifact
+          merge-multiple: true
+
+      - name: Merge llama-server + CPU backends into the CUDA zip
+        run: |
+          set -euo pipefail
+          mkdir -p cpu release
+          unzip -q artifact/llama-bin-win-cpu-x64.zip -d cpu
+          cp artifact/llama-bin-win-cuda-12.4-x64.zip "release/llama-${TAG}-bin-win-cuda-12.4-x64.zip"
+          (cd cpu && zip -qr "../release/llama-${TAG}-bin-win-cuda-12.4-x64.zip" .)
+          cp artifact/cudart-llama-bin-win-cuda-12.4-x64.zip release/
+          unzip -l "release/llama-${TAG}-bin-win-cuda-12.4-x64.zip" | grep -E 'llama-server.exe|ggml-cuda.dll|llama-moe-trace.exe'
+          (cd release && sha256sum *.zip | tee SHA256SUMS)
+
+      - name: Publish pre-release
+        run: |
+          set -euo pipefail
+          {
+            echo "Windows CUDA 12.4 build from \`akeela\` @ ${GITHUB_SHA}."
+            echo
+            echo "SHA-256:"
+            echo '```'
+            cat release/SHA256SUMS
+            echo '```'
+          } > notes.md
+          gh release create "$TAG" release/*.zip release/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$TAG" --notes-file notes.md --prerelease
