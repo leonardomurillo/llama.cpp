@@ -14,6 +14,25 @@ namespace llama_decision {
 
 namespace {
 
+// upstream #29601 removed common_batch_clear/common_batch_add (llama_batch_ext migration); the legacy
+// llama_batch API is still there, so keep the engine on it with local copies of the two helpers.
+void decision_batch_clear(llama_batch & batch) {
+    batch.n_tokens = 0;
+}
+
+void decision_batch_add(llama_batch & batch, llama_token id, llama_pos pos,
+                        const std::vector<llama_seq_id> & seq_ids, bool logits) {
+    GGML_ASSERT(batch.seq_id[batch.n_tokens] && "llama_batch size exceeded");
+    batch.token   [batch.n_tokens] = id;
+    batch.pos     [batch.n_tokens] = pos;
+    batch.n_seq_id[batch.n_tokens] = seq_ids.size();
+    for (size_t i = 0; i < seq_ids.size(); ++i) {
+        batch.seq_id[batch.n_tokens][i] = seq_ids[i];
+    }
+    batch.logits  [batch.n_tokens] = logits;
+    batch.n_tokens++;
+}
+
 double ms_since(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
 }
@@ -198,7 +217,7 @@ void engine::decode_parts(const std::vector<prompt_part> & parts) {
     llama_batch batch = llama_batch_init(n_batch, 0, 1);
     auto flush = [&]() {
         const int rc = batch.n_tokens > 0 ? llama_decode(ctx, batch) : 0;
-        common_batch_clear(batch);
+        decision_batch_clear(batch);
         if (rc != 0) {
             llama_batch_free(batch);
             throw std::runtime_error(rc == 1 ? "no free KV cache space for the decision prompt"
@@ -210,7 +229,7 @@ void engine::decode_parts(const std::vector<prompt_part> & parts) {
             if (batch.n_tokens == n_batch) {
                 flush();
             }
-            common_batch_add(batch, (*p.toks)[i], p.pos0 + (llama_pos) i, { p.seq }, false);
+            decision_batch_add(batch, (*p.toks)[i], p.pos0 + (llama_pos) i, { p.seq }, false);
         }
     }
     flush();
@@ -284,7 +303,7 @@ std::vector<std::vector<float>> engine::score_branches(const std::vector<branch>
                 if (last) {
                     out_idx.push_back(batch.n_tokens);
                 }
-                common_batch_add(batch, br.toks[std::min(i, (int) br.toks.size() - 1)], br.pos0 + (llama_pos) i, { seq }, last);
+                decision_batch_add(batch, br.toks[std::min(i, (int) br.toks.size() - 1)], br.pos0 + (llama_pos) i, { seq }, last);
             }
         }
         const int rc = llama_decode(ctx, batch);
