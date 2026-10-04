@@ -2171,7 +2171,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // no pre-FFN weighting) — the dual chains below reproduce exactly that
     ggml_tensor * ids_hot  = nullptr;
     ggml_tensor * ids_cold = nullptr;
-    const bool use_moe_packs = moe_cache && moe_cache->moe_map_hot && !gate_up_exps &&
+    // V474: packs only for small ubatches (decode / spec-verify); prefill takes the upstream mmq/op-offload path (B124 hang).
+    // ubatch.n_tokens, not the local n_tokens: last layer prunes cur to n_outputs rows
+    const bool use_moe_packs = ubatch.n_tokens <= 32 && moe_cache && moe_cache->moe_map_hot && !gate_up_exps &&
         !up_exps_s && !gate_exps_s && !down_exps_s &&
         type_op == LLM_FFN_SILU && gate_exps && !up_exps_b && !gate_exps_b && !weight_before_ffn &&
         (il < 0 || hparams.swiglu_clamp_exp[il] <= 1e-6f);
