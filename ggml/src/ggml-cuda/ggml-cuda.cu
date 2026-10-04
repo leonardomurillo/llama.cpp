@@ -1894,6 +1894,12 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
         }
     }
 
+    // ids may contain -1 (MoE expert cache hot/cold split): ggml_cuda_mul_mat_id skips mmq/mmf
+    // for those and takes the general path, which synchronizes -- report that, or the assert there fires
+    if (dst->op_params[0] != 0) {
+        return true;
+    }
+
     if (ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[2], /*n_experts=*/src0->ne[2])) {
         return false;
     }
