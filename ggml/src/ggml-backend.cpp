@@ -1868,7 +1868,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         // an async CPU split may still be computing; join before anything that
         // depends on it: another CPU split, or a split reading a CPU tensor.
-        // akeela merge: also join before upstream's buffer-reuse sync below --
+        // fork merge: also join before upstream's buffer-reuse sync below --
         // same hazard when the previous split was the async CPU one
         if (sched->cpu_async && sched->cpu_async->pending) {
             bool must_join = split_backend_id == sched->n_backends - 1 ||
